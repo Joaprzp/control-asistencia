@@ -24,148 +24,152 @@
   <div id="log"></div>
 
   <script>
-    const SUPABASE_URL = 'https://fkszclyttkrmodptcmao.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrc3pjbHl0dGtybW9kcHRjbWFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTIzODgsImV4cCI6MjA1OTg4ODM4OH0.OpHn_trW0nhdmN-KRE0SANdULybRF3jSgyGzQ4vihTM';
-    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    window.addEventListener('DOMContentLoaded', async () => {
+      const SUPABASE_URL = 'https://fkszclyttkrmodptcmao.supabase.co';
+      const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrc3pjbHl0dGtybW9kcHRjbWFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTIzODgsImV4cCI6MjA1OTg4ODM4OH0.OpHn_trW0nhdmN-KRE0SANdULybRF3jSgyGzQ4vihTM';
+      const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    const video = document.getElementById('video');
-    const statusEl = document.getElementById('status');
-    const logEl = document.getElementById('log');
+      const video = document.getElementById('video');
+      const statusEl = document.getElementById('status');
+      const logEl = document.getElementById('log');
 
-    let empleados = [];
-    let faceMatcher = null;
-    let puedeRegistrar = true;
+      let empleados = [];
+      let faceMatcher = null;
+      let puedeRegistrar = true;
 
-    async function cargarModelos() {
-      await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-      await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
-    }
-
-    async function cargarEmpleados() {
-      const { data, error } = await client.from('empleados').select('*');
-      if (error) {
-        statusEl.innerText = '❌ Error al cargar empleados';
-        throw error;
+      async function cargarModelos() {
+        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+        await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+        await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
       }
-      empleados = data;
-    }
 
-    async function prepararDescriptores() {
-      const descriptores = [];
+      async function cargarEmpleados() {
+        const { data, error } = await client.from('empleados').select('*');
+        if (error) {
+          statusEl.innerText = '❌ Error al cargar empleados';
+          throw error;
+        }
+        empleados = data;
+      }
 
-      for (const emp of empleados) {
-        try {
-          const img = await faceapi.fetchImage(emp.foto_url);
-          const deteccion = await faceapi
-            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks()
-            .withFaceDescriptor();
+      async function prepararDescriptores() {
+        const descriptores = [];
+        for (const emp of empleados) {
+          try {
+            const img = await faceapi.fetchImage(emp.foto_url);
+            const deteccion = await faceapi
+              .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+              .withFaceLandmarks()
+              .withFaceDescriptor();
 
-          if (deteccion) {
-            descriptores.push(
-              new faceapi.LabeledFaceDescriptors(emp.nombre, [deteccion.descriptor])
-            );
-          } else {
-            console.warn(`No se detectó rostro en la imagen de ${emp.nombre}`);
+            if (deteccion) {
+              descriptores.push(
+                new faceapi.LabeledFaceDescriptors(emp.nombre, [deteccion.descriptor])
+              );
+            } else {
+              console.warn(`No se detectó rostro en la imagen de ${emp.nombre}`);
+            }
+          } catch (e) {
+            console.error(`Error procesando imagen de ${emp.nombre}:`, e);
           }
-        } catch (e) {
-          console.error(`Error procesando imagen de ${emp.nombre}:`, e);
+        }
+
+        faceMatcher = new faceapi.FaceMatcher(descriptores, 0.6);
+      }
+
+      async function registrar(nombre, turno) {
+        if (!puedeRegistrar) return;
+
+        puedeRegistrar = false;
+        setTimeout(() => { puedeRegistrar = true }, 5000);
+
+        const tipo_evento = await obtenerTipoEvento(nombre);
+
+        const hora = new Date().getHours();
+        const estado = (turno === 'mañana' && hora < 14) || (turno === 'tarde' && hora >= 14)
+          ? 'en turno'
+          : 'fuera de turno';
+
+        const { error } = await client
+          .from('registros')
+          .insert([{ nombre, estado_turno: estado, tipo_evento }]);
+
+        if (error) {
+          statusEl.innerText = '❌ Error al registrar';
+          console.error(error);
+        } else {
+          statusEl.innerText = `✅ ${nombre} registrado (${estado})`;
+          logEl.innerText = `${nombre} - ${tipo_evento.toUpperCase()} (${estado}) - ${new Date().toLocaleTimeString()}`;
         }
       }
 
-      faceMatcher = new faceapi.FaceMatcher(descriptores, 0.6);
-    }
+      async function obtenerTipoEvento(nombre) {
+        const desdeHoy = new Date();
+        desdeHoy.setHours(0, 0, 0, 0);
 
-    async function registrar(nombre, turno) {
-      if (!puedeRegistrar) return;
+        const { data, error } = await client
+          .from('registros')
+          .select('id')
+          .eq('nombre', nombre)
+          .gte('fecha_hora', desdeHoy.toISOString());
 
-      puedeRegistrar = false;
-      setTimeout(() => { puedeRegistrar = true }, 5000); // 5s cooldown
-
-      const tipo_evento = await obtenerTipoEvento(nombre);
-
-      const hora = new Date().getHours();
-      const estado = (turno === 'mañana' && hora < 14) || (turno === 'tarde' && hora >= 14)
-        ? 'en turno'
-        : 'fuera de turno';
-
-      const { error } = await client
-        .from('registros')
-        .insert([{ nombre, estado_turno: estado, tipo_evento }]);
-
-      if (error) {
-        statusEl.innerText = '❌ Error al registrar';
-        console.error(error);
-      } else {
-        statusEl.innerText = `✅ ${nombre} registrado (${estado})`;
-        logEl.innerText = `${nombre} - ${tipo_evento.toUpperCase()} (${estado}) - ${new Date().toLocaleTimeString()}`;
+        return (error || data.length === 0) ? 'entrada' : 'salida';
       }
-    }
 
-    async function obtenerTipoEvento(nombre) {
-      const desdeHoy = new Date();
-      desdeHoy.setHours(0, 0, 0, 0);
+      async function iniciarCamara() {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        video.srcObject = stream;
+      }
 
-      const { data, error } = await client
-        .from('registros')
-        .select('id')
-        .eq('nombre', nombre)
-        .gte('fecha_hora', desdeHoy.toISOString());
+      function iniciarReconocimiento() {
+        video.addEventListener('play', () => {
+          const canvas = faceapi.createCanvasFromMedia(video);
+          document.body.append(canvas);
+          const displaySize = { width: video.width, height: video.height };
+          faceapi.matchDimensions(canvas, displaySize);
 
-      return (error || data.length === 0) ? 'entrada' : 'salida';
-    }
+          setInterval(async () => {
+            const detecciones = await faceapi
+              .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+              .withFaceLandmarks()
+              .withFaceDescriptors();
 
-    async function iniciarCamara() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
-      video.srcObject = stream;
-    }
+            const resized = faceapi.resizeResults(detecciones, displaySize);
+            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            faceapi.draw.drawDetections(canvas, resized);
 
-    function iniciarReconocimiento() {
-      video.addEventListener('play', () => {
-        const canvas = faceapi.createCanvasFromMedia(video);
-        document.body.append(canvas);
-        const displaySize = { width: video.width, height: video.height };
-        faceapi.matchDimensions(canvas, displaySize);
-
-        setInterval(async () => {
-          const detecciones = await faceapi
-            .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks()
-            .withFaceDescriptors();
-
-          const resized = faceapi.resizeResults(detecciones, displaySize);
-          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-          faceapi.draw.drawDetections(canvas, resized);
-
-          for (const deteccion of resized) {
-            const resultado = faceMatcher.findBestMatch(deteccion.descriptor);
-            if (resultado.label !== 'unknown') {
-              const persona = empleados.find(e => e.nombre === resultado.label);
-              if (persona) registrar(persona.nombre, persona.turno);
+            for (const deteccion of resized) {
+              const resultado = faceMatcher.findBestMatch(deteccion.descriptor);
+              if (resultado.label !== 'unknown') {
+                const persona = empleados.find(e => e.nombre === resultado.label);
+                if (persona) registrar(persona.nombre, persona.turno);
+              }
             }
-          }
-        }, 2000);
-      });
-    }
+          }, 2000);
+        });
+      }
 
-    // 🧠 Flujo principal
-    (async () => {
-      statusEl.innerText = 'Cargando modelos...';
-      await cargarModelos();
+      // Flujo principal
+      try {
+        statusEl.innerText = 'Cargando modelos...';
+        await cargarModelos();
 
-      statusEl.innerText = 'Cargando empleados...';
-      await cargarEmpleados();
+        statusEl.innerText = 'Cargando empleados...';
+        await cargarEmpleados();
 
-      statusEl.innerText = 'Procesando fotos...';
-      await prepararDescriptores();
+        statusEl.innerText = 'Procesando fotos...';
+        await prepararDescriptores();
 
-      statusEl.innerText = 'Iniciando cámara...';
-      await iniciarCamara();
+        statusEl.innerText = 'Iniciando cámara...';
+        await iniciarCamara();
 
-      statusEl.innerText = 'Esperando detección...';
-      iniciarReconocimiento();
-    })();
+        statusEl.innerText = 'Esperando detección...';
+        iniciarReconocimiento();
+      } catch (error) {
+        console.error('Error durante la inicialización:', error);
+        statusEl.innerText = '❌ Error general en el sistema';
+      }
+    });
   </script>
 </body>
 </html>
