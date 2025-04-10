@@ -7,41 +7,69 @@
   <!-- Supabase -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
 
-  <!-- MediaPipe Face Detection -->
+  <!-- MediaPipe -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <style>
     body { font-family: sans-serif; padding: 2rem; text-align: center; }
     video { border: 1px solid #ccc; width: 100%; max-width: 480px; }
-    #status { margin-top: 1rem; font-size: 1.2rem; }
+    #status, #log { margin-top: 1rem; font-size: 1.2rem; }
   </style>
 </head>
 <body>
   <h1>Control de Asistencia</h1>
   <video id="video" autoplay muted playsinline></video>
   <div id="status">Cargando...</div>
+  <div id="log"></div>
 
   <script>
-    // 🚨 Reemplazá con tus datos reales de Supabase
+    // 🚨 Reemplazá con tus datos reales
     const SUPABASE_URL = 'https://fkszclyttkrmodptcmao.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrc3pjbHl0dGtybW9kcHRjbWFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTIzODgsImV4cCI6MjA1OTg4ODM4OH0.OpHn_trW0nhdmN-KRE0SANdULybRF3jSgyGzQ4vihTM';
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const video = document.getElementById('video');
     const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
 
     const empleados = [
-      { nombre: 'Joa Pérez', referencia: 'joa', turno: 'mañana' },
-      { nombre: 'Ana Gómez', referencia: 'ana', turno: 'tarde' }
+      { nombre: 'Joa Pérez', turno: 'mañana' },
+      { nombre: 'Agustina Chiodini', turno: 'tarde' }
     ];
 
+    let puedeRegistrar = true;
+
+    async function obtenerTipoEvento(nombre) {
+      const desdeHoy = new Date();
+      desdeHoy.setHours(0, 0, 0, 0);
+
+      const { data, error } = await client
+        .from('registros')
+        .select('id')
+        .eq('nombre', nombre)
+        .gte('fecha_hora', desdeHoy.toISOString());
+
+      if (error) {
+        console.warn('Error al verificar registros anteriores:', error);
+        return 'entrada';
+      }
+
+      return (data.length === 0) ? 'entrada' : 'salida';
+    }
+
     async function registrar(nombre, turno) {
+      if (!puedeRegistrar) return;
+
+      puedeRegistrar = false;
+      setTimeout(() => { puedeRegistrar = true }, 10000); // espera 10 segundos
+
+      const tipo_evento = await obtenerTipoEvento(nombre);
+
       const hora = new Date().getHours();
       const estado = (turno === 'mañana' && hora < 14) || (turno === 'tarde' && hora >= 14)
         ? 'en turno'
         : 'fuera de turno';
-      const tipo_evento = 'entrada';
 
       const { error } = await client
         .from('registros')
@@ -52,10 +80,11 @@
         console.error(error);
       } else {
         statusEl.innerText = `✅ ${nombre} registrado (${estado})`;
+        logEl.innerText = `${nombre} - ${tipo_evento.toUpperCase()} (${estado}) - ${new Date().toLocaleTimeString()}`;
       }
     }
 
-    // Configurar MediaPipe Face Detection
+    // Configurar MediaPipe
     const faceDetection = new FaceDetection({
       locateFile: (file) =>
         `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
@@ -68,7 +97,7 @@
 
     faceDetection.onResults((results) => {
       if (results.detections.length > 0) {
-        // Por ahora: simula que siempre detecta a "Joa Pérez"
+        // Por ahora, detectamos siempre a "Joa Pérez"
         registrar('Joa Pérez', 'mañana');
       }
     });
