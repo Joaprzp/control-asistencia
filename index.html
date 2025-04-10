@@ -7,9 +7,9 @@
   <!-- Supabase -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
 
-  <!-- MediaPipe -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <!-- TensorFlow + face-api.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
   <style>
     body { font-family: sans-serif; padding: 2rem; text-align: center; }
@@ -20,11 +20,10 @@
 <body>
   <h1>Control de Asistencia</h1>
   <video id="video" autoplay muted playsinline></video>
-  <div id="status">Cargando...</div>
+  <div id="status">Cargando modelos...</div>
   <div id="log"></div>
 
   <script>
-    // 🚨 Reemplazá con tus datos reales
     const SUPABASE_URL = 'https://fkszclyttkrmodptcmao.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrc3pjbHl0dGtybW9kcHRjbWFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTIzODgsImV4cCI6MjA1OTg4ODM4OH0.OpHn_trW0nhdmN-KRE0SANdULybRF3jSgyGzQ4vihTM';
     const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -33,36 +32,56 @@
     const statusEl = document.getElementById('status');
     const logEl = document.getElementById('log');
 
-    const empleados = [
-      { nombre: 'Joa Pérez', turno: 'mañana' },
-      { nombre: 'Agustina Chiodini', turno: 'tarde' }
-    ];
-
+    let empleados = [];
+    let faceMatcher = null;
     let puedeRegistrar = true;
 
-    async function obtenerTipoEvento(nombre) {
-      const desdeHoy = new Date();
-      desdeHoy.setHours(0, 0, 0, 0);
+    async function cargarModelos() {
+      await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+      await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
+    }
 
-      const { data, error } = await client
-        .from('registros')
-        .select('id')
-        .eq('nombre', nombre)
-        .gte('fecha_hora', desdeHoy.toISOString());
-
+    async function cargarEmpleados() {
+      const { data, error } = await client.from('empleados').select('*');
       if (error) {
-        console.warn('Error al verificar registros anteriores:', error);
-        return 'entrada';
+        statusEl.innerText = '❌ Error al cargar empleados';
+        throw error;
+      }
+      empleados = data;
+    }
+
+    async function prepararDescriptores() {
+      const descriptores = [];
+
+      for (const emp of empleados) {
+        try {
+          const img = await faceapi.fetchImage(emp.foto_url);
+          const deteccion = await faceapi
+            .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (deteccion) {
+            descriptores.push(
+              new faceapi.LabeledFaceDescriptors(emp.nombre, [deteccion.descriptor])
+            );
+          } else {
+            console.warn(`No se detectó rostro en la imagen de ${emp.nombre}`);
+          }
+        } catch (e) {
+          console.error(`Error procesando imagen de ${emp.nombre}:`, e);
+        }
       }
 
-      return (data.length === 0) ? 'entrada' : 'salida';
+      faceMatcher = new faceapi.FaceMatcher(descriptores, 0.6);
     }
 
     async function registrar(nombre, turno) {
       if (!puedeRegistrar) return;
 
       puedeRegistrar = false;
-      setTimeout(() => { puedeRegistrar = true }, 10000); // espera 10 segundos
+      setTimeout(() => { puedeRegistrar = true }, 5000); // 5s cooldown
 
       const tipo_evento = await obtenerTipoEvento(nombre);
 
@@ -76,7 +95,7 @@
         .insert([{ nombre, estado_turno: estado, tipo_evento }]);
 
       if (error) {
-        statusEl.innerText = '❌ Error al guardar';
+        statusEl.innerText = '❌ Error al registrar';
         console.error(error);
       } else {
         statusEl.innerText = `✅ ${nombre} registrado (${estado})`;
@@ -84,34 +103,69 @@
       }
     }
 
-    // Configurar MediaPipe
-    const faceDetection = new FaceDetection({
-      locateFile: (file) =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
-    });
+    async function obtenerTipoEvento(nombre) {
+      const desdeHoy = new Date();
+      desdeHoy.setHours(0, 0, 0, 0);
 
-    faceDetection.setOptions({
-      model: 'short',
-      minDetectionConfidence: 0.7,
-    });
+      const { data, error } = await client
+        .from('registros')
+        .select('id')
+        .eq('nombre', nombre)
+        .gte('fecha_hora', desdeHoy.toISOString());
 
-    faceDetection.onResults((results) => {
-      if (results.detections.length > 0) {
-        // Por ahora, detectamos siempre a "Joa Pérez"
-        registrar('Joa Pérez', 'mañana');
-      }
-    });
+      return (error || data.length === 0) ? 'entrada' : 'salida';
+    }
 
-    const camera = new Camera(video, {
-      onFrame: async () => {
-        await faceDetection.send({ image: video });
-      },
-      width: 480,
-      height: 360,
-    });
+    async function iniciarCamara() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+      video.srcObject = stream;
+    }
 
-    camera.start();
-    statusEl.innerText = 'Esperando detección...';
+    function iniciarReconocimiento() {
+      video.addEventListener('play', () => {
+        const canvas = faceapi.createCanvasFromMedia(video);
+        document.body.append(canvas);
+        const displaySize = { width: video.width, height: video.height };
+        faceapi.matchDimensions(canvas, displaySize);
+
+        setInterval(async () => {
+          const detecciones = await faceapi
+            .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptors();
+
+          const resized = faceapi.resizeResults(detecciones, displaySize);
+          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+          faceapi.draw.drawDetections(canvas, resized);
+
+          for (const deteccion of resized) {
+            const resultado = faceMatcher.findBestMatch(deteccion.descriptor);
+            if (resultado.label !== 'unknown') {
+              const persona = empleados.find(e => e.nombre === resultado.label);
+              if (persona) registrar(persona.nombre, persona.turno);
+            }
+          }
+        }, 2000);
+      });
+    }
+
+    // 🧠 Flujo principal
+    (async () => {
+      statusEl.innerText = 'Cargando modelos...';
+      await cargarModelos();
+
+      statusEl.innerText = 'Cargando empleados...';
+      await cargarEmpleados();
+
+      statusEl.innerText = 'Procesando fotos...';
+      await prepararDescriptores();
+
+      statusEl.innerText = 'Iniciando cámara...';
+      await iniciarCamara();
+
+      statusEl.innerText = 'Esperando detección...';
+      iniciarReconocimiento();
+    })();
   </script>
 </body>
 </html>
