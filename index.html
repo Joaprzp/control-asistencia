@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Control de Asistencia</title>
+
+  <!-- Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+
+  <!-- MediaPipe Face Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <style>
+    body { font-family: sans-serif; padding: 2rem; text-align: center; }
+    video { border: 1px solid #ccc; width: 100%; max-width: 480px; }
+    #status { margin-top: 1rem; font-size: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>Control de Asistencia</h1>
+  <video id="video" autoplay muted playsinline></video>
+  <div id="status">Cargando...</div>
+
+  <script>
+    // 🚨 Reemplazá con tus datos reales de Supabase
+    const SUPABASE_URL = 'https://fkszclyttkrmodptcmao.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrc3pjbHl0dGtybW9kcHRjbWFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTIzODgsImV4cCI6MjA1OTg4ODM4OH0.OpHn_trW0nhdmN-KRE0SANdULybRF3jSgyGzQ4vihTM';
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const video = document.getElementById('video');
+    const statusEl = document.getElementById('status');
+
+    const empleados = [
+      { nombre: 'Joa Pérez', referencia: 'joa', turno: 'mañana' },
+      { nombre: 'Ana Gómez', referencia: 'ana', turno: 'tarde' }
+    ];
+
+    async function registrar(nombre, turno) {
+      const hora = new Date().getHours();
+      const estado = (turno === 'mañana' && hora < 14) || (turno === 'tarde' && hora >= 14)
+        ? 'en turno'
+        : 'fuera de turno';
+      const tipo_evento = 'entrada';
+
+      const { error } = await client
+        .from('registros')
+        .insert([{ nombre, estado_turno: estado, tipo_evento }]);
+
+      if (error) {
+        statusEl.innerText = '❌ Error al guardar';
+        console.error(error);
+      } else {
+        statusEl.innerText = `✅ ${nombre} registrado (${estado})`;
+      }
+    }
+
+    // Configurar MediaPipe Face Detection
+    const faceDetection = new FaceDetection({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
+    });
+
+    faceDetection.setOptions({
+      model: 'short',
+      minDetectionConfidence: 0.7,
+    });
+
+    faceDetection.onResults((results) => {
+      if (results.detections.length > 0) {
+        // Por ahora: simula que siempre detecta a "Joa Pérez"
+        registrar('Joa Pérez', 'mañana');
+      }
+    });
+
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        await faceDetection.send({ image: video });
+      },
+      width: 480,
+      height: 360,
+    });
+
+    camera.start();
+    statusEl.innerText = 'Esperando detección...';
+  </script>
+</body>
+</html>
